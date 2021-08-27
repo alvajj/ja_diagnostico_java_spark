@@ -1,5 +1,8 @@
 package minsait.ttaa.datio.engine;
 
+import minsait.ttaa.datio.common.naming.Params;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
 import org.apache.spark.sql.Column;
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Row;
@@ -8,6 +11,10 @@ import org.apache.spark.sql.expressions.Window;
 import org.apache.spark.sql.expressions.WindowSpec;
 import org.jetbrains.annotations.NotNull;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.Properties;
+
 import static minsait.ttaa.datio.common.Common.*;
 import static minsait.ttaa.datio.common.naming.PlayerInput.*;
 import static minsait.ttaa.datio.common.naming.PlayerOutput.*;
@@ -15,32 +22,162 @@ import static org.apache.spark.sql.functions.*;
 
 public class Transformer extends Writer {
     private SparkSession spark;
+    Params params = new Params();
 
     public Transformer(@NotNull SparkSession spark) {
         this.spark = spark;
+
+        InputStream inputStream;
+        Path pt = new Path("src/test/resources/params");
+        FileSystem fs;
+        Properties properties = new Properties();
+        {
+            try {
+                fs = FileSystem.get(spark.sparkContext().hadoopConfiguration());
+                inputStream = fs.open(pt);
+                properties.load(inputStream);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+
+        params.setOutputFile((String) properties.get("spark.app.output"));
+        params.setNameCsv((String) properties.get("spark.app.namecsv"));
+        System.out.println(properties.get("spark.app.parameter"));
+        String parameterString = (String) properties.get("spark.app.parameter");
+        params.setParameter(Integer.parseInt(parameterString.trim()));
+
         Dataset<Row> df = readInput();
+        if (params.getParameter() == 1) {
+            showPlayerCat(df); // punto 2
+            showPotencialOvervall(df); //punto 3
+            showFilterCat1(df); //punto 4 -1
+            showFilterCat2(df); //punto 4-2
+            showFilterCat3(df);//punto 4 -3
+            showLessAge(df);
+        } else {
+            showAll(df);
+        }
+        df.coalesce(1).write().partitionBy("nationality").parquet(OUTPUT_PATH);
 
-        df.printSchema();
+    }
 
+    private Dataset<Row> showAll(Dataset<Row> df) {
         df = cleanData(df);
-        df = exampleWindowFunction(df);
         df = columnSelection(df);
+        df.show(100, true);
+        return df;
+    }
 
-        // for show 100 records after your transformations and show the Dataset schema
-        df.show(100, false);
-        df.printSchema();
+    private Dataset<Row> showPlayerCat(Dataset<Row> df) {
+        df = cleanData(df);
+        df = windowPalyerCat(df);
+        df = columnSelectionCat(df);
+        df.show(100, true);
+        return df;
+    }
 
-        // Uncomment when you want write your final output
-        //write(df);
+    private Dataset<Row> showPotencialOvervall(Dataset<Row> df) {
+        df = cleanData(df);
+        df = windowPotencialOvervall(df);
+        df = columnSelectionPot(df);
+        df.show(100);
+        return df;
+    }
+
+    private Dataset<Row> showFilterCat1(Dataset<Row> df) {
+        df = cleanData(df);
+        df = windowFilterCat1(df);
+        df = columnSelectionCatOv(df);
+        df.show(100);
+        return df;
+    }
+
+    private Dataset<Row> showFilterCat2(Dataset<Row> df) {
+        df = cleanData(df);
+        df = windowFilterCat2(df);
+        df = columnSelectionCatOv(df);
+        df.show(100);
+        return df;
+    }
+
+    private Dataset<Row> showFilterCat3(Dataset<Row> df) {
+        df = cleanData(df);
+        df = windowFilterCat3(df);
+        df = columnSelectionCatOv(df);
+        df.show(100);
+        return df;
+    }
+
+    private Dataset<Row> showLessAge(Dataset<Row> df) {
+        df = cleanData(df);
+        df = windowFilterAge(df);
+        df = columnSelection(df);
+        df.show(100);
+        return df;
+    }
+
+    private Dataset<Row> columnSelectionCat(Dataset<Row> df) {
+        return df.select(
+                shortName.column(),
+                long_name.column(),
+                age.column(),
+                heightCm.column(),
+                weight_kg.column(),
+                nationality.column(),
+                club_name.column(),
+                overall.column(),
+                potential.column(),
+                teamPosition.column(),
+                playerCat.column()
+        );
+    }
+
+    private Dataset<Row> columnSelectionCatOv(Dataset<Row> df) {
+        return df.select(
+                shortName.column(),
+                long_name.column(),
+                age.column(),
+                heightCm.column(),
+                weight_kg.column(),
+                nationality.column(),
+                club_name.column(),
+                overall.column(),
+                potential.column(),
+                teamPosition.column(),
+                playerCat.column(),
+                potentialVSoverall.column()
+        );
+    }
+
+    private Dataset<Row> columnSelectionPot(Dataset<Row> df) {
+        return df.select(
+                shortName.column(),
+                long_name.column(),
+                age.column(),
+                heightCm.column(),
+                weight_kg.column(),
+                nationality.column(),
+                club_name.column(),
+                overall.column(),
+                potential.column(),
+                teamPosition.column(),
+                potentialVSoverall.column()
+        );
     }
 
     private Dataset<Row> columnSelection(Dataset<Row> df) {
         return df.select(
                 shortName.column(),
-                overall.column(),
+                long_name.column(),
+                age.column(),
                 heightCm.column(),
-                teamPosition.column(),
-                catHeightByPosition.column()
+                weight_kg.column(),
+                nationality.column(),
+                club_name.column(),
+                overall.column(),
+                potential.column(),
+                teamPosition.column()
         );
     }
 
@@ -51,7 +188,7 @@ public class Transformer extends Writer {
         Dataset<Row> df = spark.read()
                 .option(HEADER, true)
                 .option(INFER_SCHEMA, true)
-                .csv(INPUT_PATH);
+                .csv(params.getNameCsv());
         return df;
     }
 
@@ -82,7 +219,7 @@ public class Transformer extends Writer {
      */
     private Dataset<Row> exampleWindowFunction(Dataset<Row> df) {
         WindowSpec w = Window
-                .partitionBy(teamPosition.column())
+                .partitionBy(nationality.column())
                 .orderBy(heightCm.column().desc());
 
         Column rank = rank().over(w);
@@ -96,7 +233,56 @@ public class Transformer extends Writer {
         return df;
     }
 
+    private Dataset<Row> windowPalyerCat(Dataset<Row> df) {
+        WindowSpec w = Window
+                .partitionBy(nationality.column(), teamPosition.column())
+                .orderBy(overall.column().desc());
 
+        Column rank = rank().over(w);
 
+        Column rule = when(rank.$less(3), "A")
+                .when(rank.$less(5), "B")
+                .when(rank.$less(10), "C")
+                .otherwise("D");
 
+        df = df.withColumn(playerCat.getName(), rule);
+
+        return df;
+    }
+
+    private Dataset<Row> windowPotencialOvervall(Dataset<Row> df) {
+
+        df = df.withColumn(potentialVSoverall.getName(), potential.column().divide(overall.column()));
+
+        return df;
+    }
+
+    private Dataset<Row> windowFilterCat1(Dataset<Row> df) {
+        df = windowPalyerCat(df);
+        df = windowPotencialOvervall(df);
+        df = df.filter(df.col("player_cat").equalTo("A").or(df.col("player_cat").equalTo("B")));
+
+        return df;
+    }
+
+    private Dataset<Row> windowFilterCat2(Dataset<Row> df) {
+        df = windowPalyerCat(df);
+        df = windowPotencialOvervall(df);
+        df = df.filter("potential_vs_overall >1.15").filter(("player_cat = 'C'"));
+        return df;
+    }
+
+    private Dataset<Row> windowFilterCat3(Dataset<Row> df) {
+        df = windowPalyerCat(df);
+        df = windowPotencialOvervall(df);
+        df = df.filter("potential_vs_overall >1.25").filter(("player_cat = 'D'"));
+        return df;
+    }
+
+    private Dataset<Row> windowFilterAge(Dataset<Row> df) {
+        df = windowPalyerCat(df);
+        df = windowPotencialOvervall(df);
+        df = df.filter("age < 23");
+        return df;
+    }
 }
