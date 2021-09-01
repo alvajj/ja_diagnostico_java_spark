@@ -1,3 +1,3 @@
 spark.app.namecsv  src/test/resources/data/players_21.csv
 spark.app.output src/test/resources/data/output
-spark.app.parameter 0
+spark.app.parameter 1

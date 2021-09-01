@@ -15,13 +15,14 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.Properties;
 
-import static minsait.ttaa.datio.common.Common.*;
+import static minsait.ttaa.datio.common.Common.HEADER;
+import static minsait.ttaa.datio.common.Common.INFER_SCHEMA;
 import static minsait.ttaa.datio.common.naming.PlayerInput.*;
-import static minsait.ttaa.datio.common.naming.PlayerOutput.*;
-import static org.apache.spark.sql.functions.*;
+import static org.apache.spark.sql.functions.rank;
+import static org.apache.spark.sql.functions.when;
 
 public class Transformer extends Writer {
-    private SparkSession spark;
+    private final SparkSession spark;
     Params params = new Params();
 
     public Transformer(@NotNull SparkSession spark) {
@@ -49,71 +50,60 @@ public class Transformer extends Writer {
 
         Dataset<Row> df = readInput();
         if (params.getParameter() == 1) {
-            showPlayerCat(df); // punto 2
-            showPotencialOvervall(df); //punto 3
-            showFilterCat1(df); //punto 4 -1
-            showFilterCat2(df); //punto 4-2
-            showFilterCat3(df);//punto 4 -3
-            showLessAge(df);
+            df = windowFilterAge(df);//Se aplica el filtro de la edad
+            df = windowPalyerCat(df);
+            //df = windowFilter(df); //Si player_cat esta en los siguientes valores: A, B
+            //df = windowFilterCat2(df); //Si player_cat es C y potential_vs_overall es superior a 1.15
+            df = windowFilterCat3(df); //Si player_cat es D y potential_vs_overall es superior a 1.25
+
+            df.show(100); //Mostrando las dos columnas agregadas
+            //df = columnSelection(df);//mostrando solo las columnas establecidas en el punto 1 del ejercicio
+            //df.show(100);
+
+
+        } else if (params.getParameter() == 0) {
+            df = windowPalyerCat(df);
+            df = windowFilter(df);
+            //df = windowFilterCat2(df); //Si player_cat es C y potential_vs_overall es superior a 1.15
+            //df = windowFilterCat3(df); //Si player_cat es D y potential_vs_overall es superior a 1.25
+
+            df.show(100); //Mostrando las dos columnas agregadas
+            df = columnSelection(df);//mostrando solo las columnas establecidas en el punto 1 del ejercicio
+            df.show(100);
         } else {
             showAll(df);
         }
-        df.coalesce(1).write().partitionBy("nationality").parquet(OUTPUT_PATH);
+        df.coalesce(1).write().mode("append").partitionBy("nationality").parquet(params.getOutputFile());
 
     }
 
     private Dataset<Row> showAll(Dataset<Row> df) {
         df = cleanData(df);
         df = columnSelection(df);
-        df.show(100, true);
+        df.show(Integer.MAX_VALUE, false);
         return df;
     }
 
+
+    private Dataset<Row> columnSelection(Dataset<Row> df) {
+        return df.select(
+                shortName.column(),
+                long_name.column(),
+                age.column(),
+                heightCm.column(),
+                weight_kg.column(),
+                nationality.column(),
+                club_name.column(),
+                overall.column(),
+                potential.column(),
+                teamPosition.column()
+        );
+    }
     private Dataset<Row> showPlayerCat(Dataset<Row> df) {
         df = cleanData(df);
         df = windowPalyerCat(df);
         df = columnSelectionCat(df);
         df.show(100, true);
-        return df;
-    }
-
-    private Dataset<Row> showPotencialOvervall(Dataset<Row> df) {
-        df = cleanData(df);
-        df = windowPotencialOvervall(df);
-        df = columnSelectionPot(df);
-        df.show(100);
-        return df;
-    }
-
-    private Dataset<Row> showFilterCat1(Dataset<Row> df) {
-        df = cleanData(df);
-        df = windowFilterCat1(df);
-        df = columnSelectionCatOv(df);
-        df.show(100);
-        return df;
-    }
-
-    private Dataset<Row> showFilterCat2(Dataset<Row> df) {
-        df = cleanData(df);
-        df = windowFilterCat2(df);
-        df = columnSelectionCatOv(df);
-        df.show(100);
-        return df;
-    }
-
-    private Dataset<Row> showFilterCat3(Dataset<Row> df) {
-        df = cleanData(df);
-        df = windowFilterCat3(df);
-        df = columnSelectionCatOv(df);
-        df.show(100);
-        return df;
-    }
-
-    private Dataset<Row> showLessAge(Dataset<Row> df) {
-        df = cleanData(df);
-        df = windowFilterAge(df);
-        df = columnSelection(df);
-        df.show(100);
         return df;
     }
 
@@ -150,36 +140,7 @@ public class Transformer extends Writer {
         );
     }
 
-    private Dataset<Row> columnSelectionPot(Dataset<Row> df) {
-        return df.select(
-                shortName.column(),
-                long_name.column(),
-                age.column(),
-                heightCm.column(),
-                weight_kg.column(),
-                nationality.column(),
-                club_name.column(),
-                overall.column(),
-                potential.column(),
-                teamPosition.column(),
-                potentialVSoverall.column()
-        );
-    }
 
-    private Dataset<Row> columnSelection(Dataset<Row> df) {
-        return df.select(
-                shortName.column(),
-                long_name.column(),
-                age.column(),
-                heightCm.column(),
-                weight_kg.column(),
-                nationality.column(),
-                club_name.column(),
-                overall.column(),
-                potential.column(),
-                teamPosition.column()
-        );
-    }
 
     /**
      * @return a Dataset readed from csv file
@@ -217,22 +178,6 @@ public class Transformer extends Writer {
      * cat B for if is in 50 players tallest
      * cat C for the rest
      */
-    private Dataset<Row> exampleWindowFunction(Dataset<Row> df) {
-        WindowSpec w = Window
-                .partitionBy(nationality.column())
-                .orderBy(heightCm.column().desc());
-
-        Column rank = rank().over(w);
-
-        Column rule = when(rank.$less(10), "A")
-                .when(rank.$less(50), "B")
-                .otherwise("C");
-
-        df = df.withColumn(catHeightByPosition.getName(), rule);
-
-        return df;
-    }
-
     private Dataset<Row> windowPalyerCat(Dataset<Row> df) {
         WindowSpec w = Window
                 .partitionBy(nationality.column(), teamPosition.column())
@@ -246,43 +191,28 @@ public class Transformer extends Writer {
                 .otherwise("D");
 
         df = df.withColumn(playerCat.getName(), rule);
-
-        return df;
-    }
-
-    private Dataset<Row> windowPotencialOvervall(Dataset<Row> df) {
-
         df = df.withColumn(potentialVSoverall.getName(), potential.column().divide(overall.column()));
-
+        df = columnSelectionCatOv(df);
         return df;
     }
 
-    private Dataset<Row> windowFilterCat1(Dataset<Row> df) {
-        df = windowPalyerCat(df);
-        df = windowPotencialOvervall(df);
-        df = df.filter(df.col("player_cat").equalTo("A").or(df.col("player_cat").equalTo("B")));
-
+    private Dataset<Row> windowFilter(Dataset<Row> df) {
+        df = df.filter(playerCat.column().equalTo("A").or(playerCat.column().equalTo("B")));
         return df;
     }
 
     private Dataset<Row> windowFilterCat2(Dataset<Row> df) {
-        df = windowPalyerCat(df);
-        df = windowPotencialOvervall(df);
-        df = df.filter("potential_vs_overall >1.15").filter(("player_cat = 'C'"));
+        df = df.filter(potentialVSoverall.getName() + " > 1.15").filter(playerCat.column().equalTo("C"));
         return df;
     }
 
     private Dataset<Row> windowFilterCat3(Dataset<Row> df) {
-        df = windowPalyerCat(df);
-        df = windowPotencialOvervall(df);
-        df = df.filter("potential_vs_overall >1.25").filter(("player_cat = 'D'"));
+        df = df.filter(potentialVSoverall.getName() + " > 1.15").filter(playerCat.column().equalTo("D"));
         return df;
     }
 
     private Dataset<Row> windowFilterAge(Dataset<Row> df) {
-        df = windowPalyerCat(df);
-        df = windowPotencialOvervall(df);
-        df = df.filter("age < 23");
+        df = df.filter(age.column().$less("23"));
         return df;
     }
 }
